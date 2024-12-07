@@ -1,13 +1,70 @@
 const { exec } = require('child_process');
 const fs = require('fs');
+//const path = require('path');
+//const express = require('express');
+//const cors = require('cors');
+
+//const app = express();
+
+//app.use(cors()); // Enable CORS for all routes
+//app.use(express.json());
+
 const path = require('path');
 const express = require('express');
-const cors = require('cors');
+const { Server } = require('socket.io');
 
 const app = express();
+const server = require('http').createServer(app);
+const io = new Server(server, {
+    cors: {
+        origin: "*", // Update this for production
+        methods: ["GET", "POST"]
+    }
+});
 
-app.use(cors()); // Enable CORS for all routes
-app.use(express.json());
+// Serve the React frontend
+if (process.env.NODE_ENV === "production") {
+    app.use(express.static(path.join(__dirname, "../frontend/build")));
+
+    app.get("*", (req, res) => {
+        res.sendFile(path.resolve(__dirname, "../frontend/build", "index.html"));
+    });
+}
+
+// WebSocket logic
+let matches = {};
+
+io.on("connection", (socket) => {
+    console.log("A user connected:", socket.id);
+
+    socket.on("joinMatch", ({ matchId, playerId }) => {
+        console.log(`${playerId} joined match ${matchId}`);
+        if (!matches[matchId]) {
+            matches[matchId] = { players: [], submissions: {} };
+        }
+        if (!matches[matchId].players.includes(playerId)) {
+            matches[matchId].players.push(playerId);
+        }
+        io.to(matchId).emit("updateMatch", matches[matchId]);
+        socket.join(matchId);
+    });
+
+    socket.on("submitCode", ({ matchId, playerId, code }) => {
+        console.log(`${playerId} submitted code for match ${matchId}`);
+        matches[matchId].submissions[playerId] = code;
+        io.to(matchId).emit("updateMatch", matches[matchId]);
+    });
+
+    socket.on("disconnect", () => {
+        console.log("A user disconnected:", socket.id);
+    });
+});
+
+const PORT = process.env.PORT || 3001;
+server.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+});
+
 
 
 const tempDir = path.resolve(__dirname, 'temp');

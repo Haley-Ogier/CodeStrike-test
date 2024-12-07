@@ -13,6 +13,10 @@ import Gameplay from './pages/gameplay';
 import VictoryPage from './pages/VictoryPage'
 import LossPage from './pages/LossPage';
 import Lobby from './pages/Lobby';
+import socket from "./socket"; 
+
+window.socket = socket;
+
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
   root.render(  

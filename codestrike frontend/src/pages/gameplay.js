@@ -4,8 +4,11 @@ import CodeMirror from '@uiw/react-codemirror';
 import { python } from '@codemirror/lang-python';
 import { vscodeDark } from '@uiw/codemirror-theme-vscode';
 import ConfirmationModal from './SubmitModal';
-import useLocalStorage  from './hooks/useLocalStorage';
+import useLocalStorage from './hooks/useLocalStorage';
 import './gameplay.css';
+import { io } from "socket.io-client"; // Import Socket.IO client
+
+const socket = io(process.env.NODE_ENV === "production" ? undefined : "http://localhost:3001"); // Connect to backend
 
 const Gameplay = () => {
   const { matchId } = useParams();
@@ -25,13 +28,33 @@ const Gameplay = () => {
   const [output, setOutput] = useState('');
   const [isEditorDisabled, setIsEditorDisabled] = useState(false); // Disable editor after submission
   const [results, setResults] = useState(null); // Store match results
+  const [players, setPlayers] = useState([]); // Store list of players in the match
   const rivalUser = "User438";
   const warningTime = 30;
+
+  // Connect to socket and handle real-time updates
+  useEffect(() => {
+    // Join the match on component mount
+    socket.emit("joinMatch", { matchId, playerId: "Player A" });
+
+    // Listen for match updates
+    socket.on("updateMatch", (data) => {
+      console.log("Match state updated:", data);
+      setPlayers(data.players || []);
+      setUserAResults(data.submissions["Player A"] || null);
+      setUserBResults(data.submissions["Player B"] || null);
+    });
+
+    return () => {
+      // Cleanup listeners on unmount
+      socket.off("updateMatch");
+    };
+  }, [matchId]);
 
   useEffect(() => {
     console.log("Code state updated:", code);
   }, [code]);
-  
+
   useEffect(() => {
     const fetchQuestion = async () => {
       try {
@@ -81,69 +104,51 @@ const Gameplay = () => {
     setOutput('Executing code...');
 
     try {
-        console.log("Sending code to backend for execution:", code);
+      console.log("Sending code to backend for execution:", code);
 
-        const response = await fetch('http://localhost:3001/run-test-cases', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ code, testCases: testCases.slice(0, 2) }), // Send the first two test cases
-        });
-
-        if (!response.ok) {
-            throw new Error(`Failed to execute code: ${response.statusText}`);
-        }
-
-        const { results } = await response.json();
-        console.log("API Response:", results);
-
-        let outputText = 'Execution Results:\n\n';
-        results.forEach((test, index) => {
-            outputText += `Test Case ${index + 1}:\n`;
-            outputText += `Input: ${test.testCase}\nExpected: ${test.expectedOutput}\nOutput: ${test.userOutput}\nPassed: ${test.passed}\n\n`;
-        });
-        
-        setOutput(outputText); // Update the output in the UI
-    } catch (error) {
-        console.error("Error in handleRun:", error.message);
-        setOutput(`Error: ${error.message}`);
-    } finally {
-        setIsCodeRunning(false);
-    }
-};
-
-  
-  
-  const handleSubmit = () => {
-    setIsModalOpen(true); // Open the confirmation modal
-};
-
-const processSubmission = async () => {
-  try {
-      const response = await fetch('http://localhost:3001/submit', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ code, testCases }),
+      const response = await fetch('http://localhost:3001/run-test-cases', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, testCases: testCases.slice(0, 2) }), // Send the first two test cases
       });
 
       if (!response.ok) {
-          throw new Error('Failed to submit code');
+        throw new Error(`Failed to execute code: ${response.statusText}`);
       }
 
-      const data = await response.json();
-      console.log("Submission Results:", data);
+      const { results } = await response.json();
+      console.log("API Response:", results);
 
-      // Update state with results
-      setUserAResults(data.results);
-      setOutput(`Code submitted successfully.\nTotal Passed: ${data.passedCount}/${testCases.length}\nExecution Time: ${data.totalTime}`);
-  } catch (error) {
-      console.error("Error submitting code:", error);
-      setOutput(`Error submitting code: ${error.message}`);
-  } finally {
+      let outputText = 'Execution Results:\n\n';
+      results.forEach((test, index) => {
+        outputText += `Test Case ${index + 1}:\n`;
+        outputText += `Input: ${test.testCase}\nExpected: ${test.expectedOutput}\nOutput: ${test.userOutput}\nPassed: ${test.passed}\n\n`;
+      });
+
+      setOutput(outputText); // Update the output in the UI
+    } catch (error) {
+      console.error("Error in handleRun:", error.message);
+      setOutput(`Error: ${error.message}`);
+    } finally {
+      setIsCodeRunning(false);
+    }
+  };
+
+  const handleSubmit = () => {
+    setIsModalOpen(true); // Open the confirmation modal
+  };
+
+  const processSubmission = async () => {
+    try {
+      socket.emit("submitCode", { matchId, playerId: "Player A", code });
+
       setIsEditorDisabled(true); // Lock the editor after submission
       setIsModalOpen(false); // Close the modal
-  }
-};
-
+    } catch (error) {
+      console.error("Error submitting code:", error);
+      setOutput(`Error submitting code: ${error.message}`);
+    }
+  };
 
   const fetchResults = async () => {
     try {
@@ -155,11 +160,11 @@ const processSubmission = async () => {
           userBResults: userBResults || [], // Replace with actual or mock data
         }),
       });
-  
+
       if (!response.ok) {
         throw new Error('Failed to fetch results');
       }
-  
+
       const data = await response.json();
       console.log('Fetched Results:', data);
       setResults(data); // Update results after timer ends
@@ -168,14 +173,6 @@ const processSubmission = async () => {
       setOutput(`Error fetching results: ${error.message}`);
     }
   };
-  
-
-  const initialCode = `def solution(x):
-# Write your code here
-  pass
-`;
-
-  const problemDescription = `Problem ${matchId}`;
 
   return (
     <div className="gameplay-container">
@@ -207,16 +204,16 @@ const processSubmission = async () => {
       </div>
 
       <div className="gameplay-main-content">
-      <div className="problem-description">
-        {question ? (
-          <>
-            <h2>{question.title}</h2>
-            <p>{question.description}</p>
-          </>
-        ) : (
-          <p>Loading question...</p>
-        )}
-      </div>
+        <div className="problem-description">
+          {question ? (
+            <>
+              <h2>{question.title}</h2>
+              <p>{question.description}</p>
+            </>
+          ) : (
+            <p>Loading question...</p>
+          )}
+        </div>
         <div className="code-editor">
           <div className="editor-header">
             <h2>Code Editor</h2>
@@ -230,7 +227,7 @@ const processSubmission = async () => {
           </div>
           <div className="editor-content">
             <CodeMirror
-              value={code||initialCode}
+              value={code}
               height="100%"
               theme={vscodeDark}
               extensions={[python()]}
@@ -243,13 +240,13 @@ const processSubmission = async () => {
         <div className="console-section">
           <h2>Console</h2>
           <div className="console-content">
-          {results ? (
-            <div>
-              <h3>Results:</h3>
-              <p>Your Score: {results.userAScore}</p>
-              <p>Opponent's Score: {results.userBScore}</p>
-              <h4>Winner: {results.winner}</h4>
-            </div>
+            {results ? (
+              <div>
+                <h3>Results:</h3>
+                <p>Your Score: {results.userAScore}</p>
+                <p>Opponent's Score: {results.userBScore}</p>
+                <h4>Winner: {results.winner}</h4>
+              </div>
             ) : (
               <pre>{output}</pre>
             )}
@@ -260,7 +257,7 @@ const processSubmission = async () => {
       <ConfirmationModal 
         isOpen={isModalOpen}
         onConfirm={() => {
-            processSubmission(); 
+          processSubmission(); 
         }}
         onClose={() => setIsModalOpen(false)}
       />
